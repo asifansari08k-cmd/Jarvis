@@ -4,51 +4,91 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.jarvis.ai.AIRequest
 import com.example.jarvis.ai.ConversationManager
-import com.example.jarvis.ai.GeminiClient
+import com.example.jarvis.ai.DeepSeekBridge
 import com.example.jarvis.ai.JarvisCommand
 import com.example.jarvis.ai.JarvisCommandParser
 import com.example.jarvis.automation.CommandExecutor
 import com.example.jarvis.models.Message
-import com.example.jarvis.network.ApiResult
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 class MainViewModel : ViewModel() {
 
-    private val geminiClient = GeminiClient()
+    companion object {
+        private const val TAG = "JARVIS_VM"
+    }
+
+    // =========================================================
+    // CONVERSATION
+    // =========================================================
 
     private val conversationManager =
         ConversationManager()
 
-    // ERROR FIX: Parser ko as an object instantiate kiya hai
-    // Taaki "Unresolved reference 'parse'" ka error na aaye
-    private val commandParser = 
+    // =========================================================
+    // COMMAND PARSER
+    // =========================================================
+
+    private val commandParser =
         JarvisCommandParser()
 
+    // =========================================================
+    // DEEPSEEK BRIDGE
+    // =========================================================
+
+    private var deepSeekBridge: DeepSeekBridge? = null
+
+    // =========================================================
+    // UI STATE
+    // =========================================================
+
     private val _ui =
-        MutableStateFlow(UiState())
+        MutableStateFlow(
+            UiState()
+        )
 
     val ui: StateFlow<UiState> =
         _ui.asStateFlow()
 
+    // =========================================================
+    // COMMAND EXECUTOR
+    // =========================================================
+
     private var commandExecutor: CommandExecutor? = null
 
-    private var responseListener: ((String) -> Unit)? = null
+    // =========================================================
+    // RESPONSE LISTENER
+    // =========================================================
 
-    // Safe Coroutine Handler to prevent app crashes on network/AI failure
-    private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
-        Log.e("JARVIS_VM", "Critical Error: \${exception.message}", exception)
-        setThinking(false)
-        respond("System overloaded. Ek error aayi hai: \${exception.localizedMessage}")
-    }
+    private var responseListener:
+        ((String) -> Unit)? = null
 
     // =========================================================
-    // EXECUTOR
+    // COROUTINE ERROR HANDLER
+    // =========================================================
+
+    private val exceptionHandler =
+        CoroutineExceptionHandler { _, exception ->
+
+            Log.e(
+                TAG,
+                "Critical error",
+                exception
+            )
+
+            setThinking(false)
+
+            respond(
+                "Sir, system me ek error aa gayi hai."
+            )
+        }
+
+    // =========================================================
+    // INITIALIZE EXECUTOR
     // =========================================================
 
     fun initializeExecutor(
@@ -62,6 +102,14 @@ class MainViewModel : ViewModel() {
                     context.applicationContext
                 )
         }
+
+        if (deepSeekBridge == null) {
+
+            deepSeekBridge =
+                DeepSeekBridge.getInstance(
+                    context.applicationContext
+                )
+        }
     }
 
     // =========================================================
@@ -72,7 +120,8 @@ class MainViewModel : ViewModel() {
         listener: ((String) -> Unit)?
     ) {
 
-        responseListener = listener
+        responseListener =
+            listener
     }
 
     // =========================================================
@@ -80,8 +129,7 @@ class MainViewModel : ViewModel() {
     // =========================================================
 
     fun send(
-        text: String,
-        apiKey: String
+        text: String
     ) {
 
         val message =
@@ -91,10 +139,22 @@ class MainViewModel : ViewModel() {
             return
         }
 
-        addUserMessage(message)
+        // -----------------------------------------------------
+        // Add user message to UI
+        // -----------------------------------------------------
+
+        addUserMessage(
+            message
+        )
+
+        // -----------------------------------------------------
+        // Save conversation
+        // -----------------------------------------------------
 
         conversationManager
-            .addUserMessage(message)
+            .addUserMessage(
+                message
+            )
 
         setThinking(true)
 
@@ -103,7 +163,9 @@ class MainViewModel : ViewModel() {
         // -----------------------------------------------------
 
         val localCommand =
-            detectLocalCommand(message)
+            detectLocalCommand(
+                message
+            )
 
         if (localCommand != null) {
 
@@ -115,27 +177,40 @@ class MainViewModel : ViewModel() {
         }
 
         // -----------------------------------------------------
-        // Gemini
+        // DeepSeek
         // -----------------------------------------------------
 
-        viewModelScope.launch(exceptionHandler) {
-
-            if (apiKey.isBlank()) {
-
-                respond(
-                    "Gemini API key set nahi hai. Settings me API key add karo."
-                )
-
-                setThinking(false)
-
-                return@launch
-            }
+        viewModelScope.launch(
+            exceptionHandler
+        ) {
 
             try {
+
+                val bridge =
+                    deepSeekBridge
+
+                if (bridge == null) {
+
+                    respond(
+                        "DeepSeek bridge ready nahi hai."
+                    )
+
+                    setThinking(false)
+
+                    return@launch
+                }
+
+                // -------------------------------------------------
+                // Previous conversation context
+                // -------------------------------------------------
 
                 val previousContext =
                     conversationManager
                         .buildContext()
+
+                // -------------------------------------------------
+                // Build JARVIS prompt
+                // -------------------------------------------------
 
                 val prompt =
                     buildPrompt(
@@ -143,39 +218,29 @@ class MainViewModel : ViewModel() {
                         message
                     )
 
-                val result =
-                    geminiClient.generate(
-                        AIRequest(
-                            prompt = prompt,
-                            apiKey = apiKey
-                        )
+                // -------------------------------------------------
+                // Send to DeepSeek app
+                // -------------------------------------------------
+
+                val response =
+                    bridge.sendPrompt(
+                        prompt
                     )
 
-                when (result) {
-
-                    is ApiResult.Success -> {
-
-                        handleGeminiResponse(
-                            result.data.text ?: ""
-                        )
-                    }
-
-                    is ApiResult.Error -> {
-
-                        respond(
-                            result.message
-                        )
-
-                        setThinking(false)
-                    }
-                }
+                handleDeepSeekResponse(
+                    response
+                )
 
             } catch (e: Exception) {
 
+                Log.e(
+                    TAG,
+                    "DeepSeek error",
+                    e
+                )
+
                 respond(
-                    "JARVIS error: ${
-                        e.message ?: "Unknown error"
-                    }"
+                    "Sir, DeepSeek se response nahi mila."
                 )
 
                 setThinking(false)
@@ -184,7 +249,7 @@ class MainViewModel : ViewModel() {
     }
 
     // =========================================================
-    // BUILD GEMINI PROMPT
+    // BUILD DEEPSEEK PROMPT
     // =========================================================
 
     private fun buildPrompt(
@@ -196,24 +261,34 @@ class MainViewModel : ViewModel() {
 
             append(
                 """
-                You are JARVIS, the user's personal Android AI assistant.
+                You are JARVIS, an Android personal AI assistant.
 
-                Conversation behavior:
-                - Understand Hindi, Hinglish and English naturally.
-                - Remember the recent conversation context.
-                - Understand follow-up references like "haan", "woh", "usko",
-                  "pehle wala", "continue karo", etc.
-                - For normal questions and casual conversation, reply naturally.
-                - Do not return JSON for normal conversation.
+                LANGUAGE:
+                - Understand Hindi, Hinglish and English.
+                - Reply naturally in the user's language.
+                - Be concise unless detailed explanation is requested.
 
-                Android control behavior:
-                - If the user asks you to control the Android device,
-                  return one valid JSON command.
-                - Use only supported actions.
-                - For multiple actions use AUTOMATION with steps.
-                - Important external actions must require confirmation.
+                CONVERSATION:
+                - Use recent conversation context.
+                - Understand follow-up requests.
+                - Understand words like:
+                  "haan", "woh", "usko", "ise", "pehle wala",
+                  "continue karo", "phir se", "ab ye karo".
 
-                Supported actions:
+                IMPORTANT:
+                You are the intelligence/understanding layer.
+                JARVIS Android will execute commands separately.
+
+                NORMAL CONVERSATION:
+                If the user is asking a normal question,
+                return normal natural text.
+
+                ANDROID COMMANDS:
+                If the user asks JARVIS to control the Android device,
+                return ONLY ONE valid JSON object.
+
+                SUPPORTED ACTIONS:
+
                 OPEN_APP
                 OPEN_URL
                 WEB_SEARCH
@@ -230,8 +305,10 @@ class MainViewModel : ViewModel() {
                 WAIT
                 AUTOMATION
                 NO_ACTION
+                CONVERSATION
 
-                JSON format:
+                JSON FORMAT:
+
                 {
                   "action": "ACTION_NAME",
                   "target": "TARGET",
@@ -240,91 +317,165 @@ class MainViewModel : ViewModel() {
                   "requiresConfirmation": false
                 }
 
-                Never invent unsupported actions.
+                MULTI-STEP FORMAT:
+
+                {
+                  "action": "AUTOMATION",
+                  "steps": [
+                    {
+                      "action": "OPEN_APP",
+                      "target": "YouTube"
+                    },
+                    {
+                      "action": "CLICK",
+                      "target": "Search"
+                    },
+                    {
+                      "action": "TYPE",
+                      "value": "Iron Man"
+                    }
+                  ],
+                  "requiresConfirmation": false
+                }
+
+                RULES:
+                - Never invent unsupported actions.
+                - Never invent app package names.
+                - Do not put Markdown around command JSON.
+                - For normal conversation, do not return JSON.
+                - For an Android command, return valid JSON only.
+                - Do not execute the action yourself.
+                - JARVIS will execute the parsed command.
 
                 """.trimIndent()
             )
 
-            append("\n\n")
+            // -------------------------------------------------
+            // Conversation context
+            // -------------------------------------------------
 
-            if (previousContext.isNotBlank()) {
+            if (
+                previousContext.isNotBlank()
+            ) {
 
-                append(previousContext)
-                append("\n")
+                append(
+                    "\n\nRECENT CONVERSATION:\n"
+                )
+
+                append(
+                    previousContext
+                )
             }
 
+            // -------------------------------------------------
+            // Current request
+            // -------------------------------------------------
+
             append(
-                "CURRENT USER REQUEST:\n"
+                "\n\nCURRENT USER REQUEST:\n"
             )
 
-            append(currentMessage)
+            append(
+                currentMessage
+            )
         }
     }
 
     // =========================================================
-    // GEMINI RESPONSE & SANITIZER
+    // DEEPSEEK RESPONSE
     // =========================================================
 
-    private fun handleGeminiResponse(
-        response: String
+    private fun handleDeepSeekResponse(
+        response: String?
     ) {
 
         val rawText =
-            response.trim()
+            response
+                ?.trim()
+                .orEmpty()
 
         if (rawText.isBlank()) {
 
             respond(
-                "Mujhe koi response nahi mila."
+                "Sir, mujhe DeepSeek se koi response nahi mila."
             )
 
             setThinking(false)
 
             return
         }
-        
-        // Clean markdown syntax securely
-        var cleanText = rawText
-        if (cleanText.startsWith("```json", ignoreCase = true)) {
-            cleanText = cleanText.substring(7)
-        } else if (cleanText.startsWith("```")) {
-            cleanText = cleanText.substring(3)
-        }
-        if (cleanText.endsWith("```")) {
-            cleanText = cleanText.substring(0, cleanText.length - 3)
-        }
-        cleanText = cleanText.trim()
 
-        val looksLikeJson =
-            cleanText.startsWith("{") && cleanText.endsWith("}")
+        // -----------------------------------------------------
+        // Parse response
+        // -----------------------------------------------------
 
-        if (looksLikeJson) {
-            
+        val command =
             try {
 
-                val command =
-                    commandParser.parse(
-                        cleanText
-                    )
+                commandParser.parse(
+                    rawText
+                )
 
-                if (command != null && command.action != "CONVERSATION") {
-
-                    executeCommand(
-                        command
-                    )
-
-                    return
-                }
-                
             } catch (e: Exception) {
-                Log.e("JARVIS_VM", "JSON Parse error: \${e.message}")
+
+                Log.e(
+                    TAG,
+                    "Command parser error",
+                    e
+                )
+
+                null
             }
+
+        if (
+            command != null &&
+            command.action.uppercase() != "CONVERSATION"
+        ) {
+
+            executeCommand(
+                command
+            )
+
+            return
         }
 
-        // Normal conversation fallback
-        respond(rawText)
+        // -----------------------------------------------------
+        // Normal conversation
+        // -----------------------------------------------------
+
+        respond(
+            extractConversationText(
+                rawText,
+                command
+            )
+        )
 
         setThinking(false)
+    }
+
+    // =========================================================
+    // CONVERSATION TEXT
+    // =========================================================
+
+    private fun extractConversationText(
+        rawText: String,
+        command: JarvisCommand?
+    ): String {
+
+        if (
+            command != null &&
+            command.action.uppercase() == "CONVERSATION"
+        ) {
+
+            return command.target
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: rawText
+        }
+
+        return rawText
     }
 
     // =========================================================
@@ -341,7 +492,7 @@ class MainViewModel : ViewModel() {
         if (executor == null) {
 
             respond(
-                "JARVIS executor ready nahi hai."
+                "Sir, JARVIS executor ready nahi hai."
             )
 
             setThinking(false)
@@ -353,10 +504,12 @@ class MainViewModel : ViewModel() {
         // Confirmation
         // -----------------------------------------------------
 
-        if (command.requiresConfirmation) {
+        if (
+            command.requiresConfirmation
+        ) {
 
             respond(
-                "Ye action karne se pehle tumhari confirmation chahiye."
+                "Sir, is action ke liye confirmation required hai."
             )
 
             setThinking(false)
@@ -364,7 +517,9 @@ class MainViewModel : ViewModel() {
             return
         }
 
-        viewModelScope.launch(exceptionHandler) {
+        viewModelScope.launch(
+            exceptionHandler
+        ) {
 
             try {
 
@@ -384,16 +539,20 @@ class MainViewModel : ViewModel() {
                 } else {
 
                     respond(
-                        "Ye command execute nahi ho saki."
+                        "Sir, ye command execute nahi ho saki."
                     )
                 }
 
             } catch (e: Exception) {
 
+                Log.e(
+                    TAG,
+                    "Command execution error",
+                    e
+                )
+
                 respond(
-                    "Command error: ${
-                        e.message ?: "Unknown error"
-                    }"
+                    "Sir, command execute karte waqt error aayi."
                 )
             }
 
@@ -409,17 +568,19 @@ class MainViewModel : ViewModel() {
         command: JarvisCommand
     ): String {
 
-        // Return type strictly defined to avoid Any vs String mismatch
         return when (
-            command.action.uppercase()
+            command.action
+                .trim()
+                .uppercase()
         ) {
 
             "OPEN_APP" -> {
 
                 val app =
                     command.target
-                        ?.replaceFirstChar {
-                            it.uppercase()
+                        ?.trim()
+                        ?.takeIf {
+                            it.isNotBlank()
                         }
                         ?: "app"
 
@@ -431,29 +592,17 @@ class MainViewModel : ViewModel() {
             }
 
             "WEB_SEARCH" -> {
-                
-                if (
-                    !command.value.isNullOrBlank()
-                ) {
-                    
-                    "Web par search kar diya."
-                    
-                } else {
-                    
-                    "Search kar diya."
-                }
+                "Web par search kar diya."
             }
 
             "YOUTUBE" -> {
 
                 if (
-                    !command.value.isNullOrBlank()
+                    command.value
+                        ?.isNotBlank() == true
                 ) {
-
                     "YouTube par search kar diya."
-
                 } else {
-
                     "YouTube open kar diya."
                 }
             }
@@ -587,6 +736,32 @@ class MainViewModel : ViewModel() {
                 )
             }
 
+            command == "back" ||
+            command == "go back" ||
+            command == "peeche jao" -> {
+
+                JarvisCommand(
+                    action = "BACK"
+                )
+            }
+
+            command == "home" ||
+            command == "home screen" ||
+            command == "ghar jao" -> {
+
+                JarvisCommand(
+                    action = "HOME"
+                )
+            }
+
+            command == "recent apps" ||
+            command == "recents" -> {
+
+                JarvisCommand(
+                    action = "RECENTS"
+                )
+            }
+
             else -> null
         }
     }
@@ -600,7 +775,11 @@ class MainViewModel : ViewModel() {
         appName: String
     ): Boolean {
 
-        if (!command.contains(appName)) {
+        if (
+            !command.contains(
+                appName
+            )
+        ) {
             return false
         }
 
@@ -608,11 +787,12 @@ class MainViewModel : ViewModel() {
             command.contains("khol") ||
             command.contains("kholo") ||
             command.contains("launch") ||
-            command.contains("chala")
+            command.contains("chala") ||
+            command.contains("chalao")
     }
 
     // =========================================================
-    // RESPONSE
+    // RESPOND
     // =========================================================
 
     private fun respond(
@@ -641,7 +821,7 @@ class MainViewModel : ViewModel() {
     }
 
     // =========================================================
-    // USER MESSAGE UI
+    // ADD USER MESSAGE
     // =========================================================
 
     private fun addUserMessage(
@@ -649,7 +829,8 @@ class MainViewModel : ViewModel() {
     ) {
 
         val messages =
-            _ui.value.messages.toMutableList()
+            _ui.value.messages
+                .toMutableList()
 
         messages.add(
             Message(
@@ -666,7 +847,7 @@ class MainViewModel : ViewModel() {
     }
 
     // =========================================================
-    // ASSISTANT MESSAGE UI
+    // ADD ASSISTANT MESSAGE
     // =========================================================
 
     private fun addAssistantMessage(
@@ -674,7 +855,8 @@ class MainViewModel : ViewModel() {
     ) {
 
         val messages =
-            _ui.value.messages.toMutableList()
+            _ui.value.messages
+                .toMutableList()
 
         messages.add(
             Message(
@@ -726,6 +908,7 @@ class MainViewModel : ViewModel() {
     override fun onCleared() {
 
         responseListener = null
+        deepSeekBridge = null
 
         conversationManager.clear()
 
