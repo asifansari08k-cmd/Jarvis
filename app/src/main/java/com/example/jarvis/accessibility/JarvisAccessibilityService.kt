@@ -2,13 +2,13 @@ package com.example.jarvis.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
-import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import com.example.jarvis.ai.DeepSeekBridge
 
 class JarvisAccessibilityService : AccessibilityService() {
 
     companion object {
-
         @Volatile
         var instance: JarvisAccessibilityService? = null
     }
@@ -19,7 +19,6 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-
         instance = this
     }
 
@@ -30,19 +29,21 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(
         event: AccessibilityEvent?
     ) {
-        if (event == null) {
-            return
-        }
+        if (event == null) return
 
-        // Accessibility events can be observed here.
-        //
-        // Later DeepSeek integration can use:
-        //
-        // TYPE_WINDOW_STATE_CHANGED
-        // TYPE_WINDOW_CONTENT_CHANGED
-        // TYPE_VIEW_TEXT_CHANGED
-        //
-        // to detect DeepSeek UI changes and assistant responses.
+        /*
+         * Forward accessibility events to DeepSeekBridge.
+         *
+         * DeepSeekBridge itself decides whether the event belongs
+         * to the DeepSeek application and whether a response is ready.
+         */
+        try {
+            DeepSeekBridge
+                .getInstance(applicationContext)
+                .onAccessibilityEvent(event)
+        } catch (_: Exception) {
+            // Never allow bridge errors to crash AccessibilityService.
+        }
     }
 
     // =========================================================
@@ -152,6 +153,14 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
 
             // -------------------------------------------------
+            // SEND
+            // -------------------------------------------------
+
+            "SEND" -> {
+                clickSendButton()
+            }
+
+            // -------------------------------------------------
             // UNKNOWN ACTION
             // -------------------------------------------------
 
@@ -162,7 +171,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     // =========================================================
-    // CLICK BY VISIBLE TEXT
+    // CLICK TEXT
     // =========================================================
 
     fun clickText(
@@ -198,21 +207,17 @@ class JarvisAccessibilityService : AccessibilityService() {
         val searchText =
             target
                 ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
+                ?.takeIf { it.isNotBlank() }
                 ?: value
                     ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
+                    ?.takeIf { it.isNotBlank() }
                 ?: return false
 
         val root =
             rootInActiveWindow
                 ?: return false
 
-        // 1. Try visible text.
+        // 1. Visible text
         if (
             clickByText(
                 root,
@@ -222,7 +227,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // 2. Try content description.
+        // 2. Content description
         if (
             clickByContentDescription(
                 root,
@@ -232,7 +237,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // 3. Try resource ID.
+        // 3. Resource ID
         return clickByResourceId(
             root,
             searchText
@@ -265,7 +270,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
 
         // -----------------------------------------------------
-        // First: directly clickable node
+        // Direct clickable node
         // -----------------------------------------------------
 
         for (node in nodes) {
@@ -275,18 +280,21 @@ class JarvisAccessibilityService : AccessibilityService() {
                 node.isClickable
             ) {
 
-                if (
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
-                ) {
-                    return true
+                try {
+                    if (
+                        node.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
+                } catch (_: Exception) {
                 }
             }
         }
 
         // -----------------------------------------------------
-        // Second: clickable parent
+        // Clickable parent
         // -----------------------------------------------------
 
         for (node in nodes) {
@@ -305,12 +313,15 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    if (
-                        parent.performAction(
-                            AccessibilityNodeInfo.ACTION_CLICK
-                        )
-                    ) {
-                        return true
+                    try {
+                        if (
+                            parent.performAction(
+                                AccessibilityNodeInfo.ACTION_CLICK
+                            )
+                        ) {
+                            return true
+                        }
+                    } catch (_: Exception) {
                     }
                 }
 
@@ -368,19 +379,22 @@ class JarvisAccessibilityService : AccessibilityService() {
             node.isVisibleToUser
         ) {
 
-            // Direct click.
+            // Direct click
             if (node.isClickable) {
 
-                if (
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
-                ) {
-                    return true
+                try {
+                    if (
+                        node.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
+                } catch (_: Exception) {
                 }
             }
 
-            // Click parent.
+            // Click parent
             var parent =
                 node.parent
 
@@ -391,12 +405,15 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    if (
-                        parent.performAction(
-                            AccessibilityNodeInfo.ACTION_CLICK
-                        )
-                    ) {
-                        return true
+                    try {
+                        if (
+                            parent.performAction(
+                                AccessibilityNodeInfo.ACTION_CLICK
+                            )
+                        ) {
+                            return true
+                        }
+                    } catch (_: Exception) {
                     }
                 }
 
@@ -405,7 +422,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Search children.
+        // Search children
         for (i in 0 until node.childCount) {
 
             val child =
@@ -456,28 +473,25 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         for (node in nodes) {
 
-            // -------------------------------------------------
             // Direct click
-            // -------------------------------------------------
-
             if (
                 node.isVisibleToUser &&
                 node.isClickable
             ) {
 
-                if (
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
-                ) {
-                    return true
+                try {
+                    if (
+                        node.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
+                } catch (_: Exception) {
                 }
             }
 
-            // -------------------------------------------------
             // Click parent
-            // -------------------------------------------------
-
             var parent =
                 node.parent
 
@@ -488,17 +502,173 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    if (
-                        parent.performAction(
-                            AccessibilityNodeInfo.ACTION_CLICK
-                        )
-                    ) {
-                        return true
+                    try {
+                        if (
+                            parent.performAction(
+                                AccessibilityNodeInfo.ACTION_CLICK
+                            )
+                        ) {
+                            return true
+                        }
+                    } catch (_: Exception) {
                     }
                 }
 
                 parent =
                     parent.parent
+            }
+        }
+
+        return false
+    }
+
+    // =========================================================
+    // SEND BUTTON
+    // =========================================================
+
+    private fun clickSendButton(): Boolean {
+
+        val root =
+            rootInActiveWindow
+                ?: return false
+
+        /*
+         * Do not hard-code a DeepSeek resource ID.
+         *
+         * DeepSeek UI/resource IDs can change between versions.
+         * We therefore use accessibility text/content-description
+         * first and then inspect clickable buttons.
+         */
+
+        val sendLabels =
+            listOf(
+                "Send",
+                "Send message",
+                "Send Message",
+                "Submit",
+                "send",
+                "send message"
+            )
+
+        // -----------------------------------------------------
+        // 1. Search visible text
+        // -----------------------------------------------------
+
+        for (label in sendLabels) {
+
+            if (
+                clickByText(
+                    root,
+                    label
+                )
+            ) {
+                return true
+            }
+        }
+
+        // -----------------------------------------------------
+        // 2. Search content descriptions
+        // -----------------------------------------------------
+
+        for (label in sendLabels) {
+
+            if (
+                clickByContentDescription(
+                    root,
+                    label
+                )
+            ) {
+                return true
+            }
+        }
+
+        // -----------------------------------------------------
+        // 3. Search button nodes
+        // -----------------------------------------------------
+
+        return findAndClickSendButton(
+            root
+        )
+    }
+
+    // =========================================================
+    // FIND SEND BUTTON FROM NODE TREE
+    // =========================================================
+
+    private fun findAndClickSendButton(
+        node: AccessibilityNodeInfo
+    ): Boolean {
+
+        if (
+            node.isVisibleToUser &&
+            node.isClickable
+        ) {
+
+            val className =
+                node.className
+                    ?.toString()
+                    ?.lowercase()
+                    ?: ""
+
+            val text =
+                node.text
+                    ?.toString()
+                    ?.trim()
+                    ?.lowercase()
+                    ?: ""
+
+            val description =
+                node.contentDescription
+                    ?.toString()
+                    ?.trim()
+                    ?.lowercase()
+                    ?: ""
+
+            val looksLikeButton =
+                className.contains("button") ||
+                className.contains("imagebutton")
+
+            val looksLikeSend =
+                text == "send" ||
+                text.contains("send message") ||
+                description == "send" ||
+                description.contains("send message") ||
+                description.contains("submit")
+
+            if (
+                looksLikeButton &&
+                looksLikeSend
+            ) {
+
+                try {
+                    if (
+                        node.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+
+            val child =
+                try {
+                    node.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
+                    ?: continue
+
+            if (
+                findAndClickSendButton(
+                    child
+                )
+            ) {
+                return true
             }
         }
 
@@ -523,7 +693,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: return false
 
         // -----------------------------------------------------
-        // Find target editable field.
+        // Find target editable field
         // -----------------------------------------------------
 
         val node =
@@ -549,7 +719,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: return false
 
         // -----------------------------------------------------
-        // Prepare text arguments.
+        // Prepare arguments
         // -----------------------------------------------------
 
         val arguments =
@@ -562,7 +732,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         )
 
         // -----------------------------------------------------
-        // Set text.
+        // Set text
         // -----------------------------------------------------
 
         return try {
