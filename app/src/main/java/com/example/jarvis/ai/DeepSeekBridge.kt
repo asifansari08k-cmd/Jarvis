@@ -11,6 +11,34 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * DeepSeek Bridge
+ *
+ * DeepSeek = JARVIS ka AI brain
+ * AccessibilityService = DeepSeek UI control + response reader
+ *
+ * Flow:
+ *
+ * JARVIS
+ *   ↓
+ * DeepSeekBridge
+ *   ↓
+ * Open DeepSeek
+ *   ↓
+ * TYPE prompt
+ *   ↓
+ * SEND
+ *   ↓
+ * DeepSeek response
+ *   ↓
+ * AccessibilityEvent
+ *   ↓
+ * Read response
+ *   ↓
+ * MainViewModel
+ *   ↓
+ * JarvisCommandParser
+ */
 class DeepSeekBridge private constructor(
     private val context: Context
 ) {
@@ -21,11 +49,17 @@ class DeepSeekBridge private constructor(
 
         private const val RESPONSE_TIMEOUT_MS = 60_000L
 
-        private const val UI_LOAD_DELAY_MS = 1_200L
+        private const val UI_LOAD_DELAY_MS = 1_500L
 
-        private const val SEND_DELAY_MS = 400L
+        private const val SEND_DELAY_MS = 500L
 
-        private const val RESPONSE_START_DELAY_MS = 1_000L
+        private const val RESPONSE_START_DELAY_MS = 1_200L
+
+        /**
+         * Streaming response ko immediately return karne ke bajay
+         * thoda stable hone ka wait.
+         */
+        private const val RESPONSE_STABLE_MS = 900L
 
         @Volatile
         private var instance: DeepSeekBridge? = null
@@ -56,17 +90,50 @@ class DeepSeekBridge private constructor(
     private var pendingResponse:
         CompletableDeferred<String?>? = null
 
-    @Volatile
-    private var lastResponse: String? = null
-
+    /**
+     * User ne jo prompt bheja tha.
+     */
     @Volatile
     private var sentPrompt: String = ""
 
+    /**
+     * SEND se pehle screen ka snapshot.
+     *
+     * Isse old DeepSeek response ko new response samajhne
+     * ka chance kam hota hai.
+     */
     @Volatile
-    private var requestStartedAt: Long = 0L
+    private var beforeSendSnapshot: String = ""
 
+    /**
+     * Latest detected assistant response.
+     */
+    @Volatile
+    private var lastCandidateResponse: String = ""
+
+    /**
+     * Last response snapshot.
+     */
+    @Volatile
+    private var lastScreenSnapshot: String = ""
+
+    /**
+     * Response kab start hua.
+     */
     @Volatile
     private var responseStartedAt: Long = 0L
+
+    /**
+     * Latest candidate kab mila.
+     */
+    @Volatile
+    private var candidateChangedAt: Long = 0L
+
+    /**
+     * Request start time.
+     */
+    @Volatile
+    private var requestStartedAt: Long = 0L
 
     // =========================================================
     // SEND PROMPT
@@ -85,7 +152,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Prevent multiple requests
+        // Prevent duplicate requests
         // -----------------------------------------------------
 
         if (
@@ -96,7 +163,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Accessibility service
+        // Accessibility service check
         // -----------------------------------------------------
 
         val service =
@@ -122,18 +189,24 @@ class DeepSeekBridge private constructor(
         sentPrompt =
             cleanPrompt
 
-        lastResponse = null
+        beforeSendSnapshot = ""
+
+        lastCandidateResponse = ""
+
+        lastScreenSnapshot = ""
 
         responseStartedAt = 0L
+
+        candidateChangedAt = 0L
 
         requestStartedAt =
             System.currentTimeMillis()
 
         try {
 
-            // -------------------------------------------------
-            // Open DeepSeek
-            // -------------------------------------------------
+            // =================================================
+            // OPEN DEEPSEEK
+            // =================================================
 
             if (!openDeepSeek()) {
 
@@ -142,17 +215,24 @@ class DeepSeekBridge private constructor(
                 )
             }
 
-            // -------------------------------------------------
-            // Wait for UI
-            // -------------------------------------------------
+            // =================================================
+            // WAIT FOR DEEPSEEK UI
+            // =================================================
 
             delay(
                 UI_LOAD_DELAY_MS
             )
 
-            // -------------------------------------------------
-            // Type prompt
-            // -------------------------------------------------
+            // =================================================
+            // CAPTURE SCREEN BEFORE TYPING
+            // =================================================
+
+            beforeSendSnapshot =
+                getCurrentScreenText()
+
+            // =================================================
+            // TYPE PROMPT
+            // =================================================
 
             val typed =
                 service.performJarvisAction(
@@ -167,17 +247,17 @@ class DeepSeekBridge private constructor(
                 )
             }
 
-            // -------------------------------------------------
-            // Allow UI to update
-            // -------------------------------------------------
+            // =================================================
+            // WAIT FOR INPUT UI
+            // =================================================
 
             delay(
                 SEND_DELAY_MS
             )
 
-            // -------------------------------------------------
-            // Send
-            // -------------------------------------------------
+            // =================================================
+            // SEND MESSAGE
+            // =================================================
 
             val sent =
                 service.performJarvisAction(
@@ -191,20 +271,34 @@ class DeepSeekBridge private constructor(
                 )
             }
 
-            // -------------------------------------------------
-            // Give response UI time to start
-            // -------------------------------------------------
+            // =================================================
+            // RESPONSE MODE START
+            // =================================================
 
             responseStartedAt =
                 System.currentTimeMillis()
+
+            candidateChangedAt = 0L
+
+            lastCandidateResponse = ""
+
+            // =================================================
+            // GIVE DEEPSEEK TIME TO START GENERATING
+            // =================================================
 
             delay(
                 RESPONSE_START_DELAY_MS
             )
 
-            // -------------------------------------------------
-            // Wait for response
-            // -------------------------------------------------
+            // =================================================
+            // INITIAL RESPONSE CHECK
+            // =================================================
+
+            inspectCurrentScreen()
+
+            // =================================================
+            // WAIT FOR RESPONSE
+            // =================================================
 
             val response =
                 withTimeoutOrNull(
@@ -239,11 +333,11 @@ class DeepSeekBridge private constructor(
 
         } finally {
 
-            waitingForResponse.set(
-                false
-            )
+            waitingForResponse.set(false)
 
             pendingResponse = null
+
+            candidateChangedAt = 0L
         }
     }
 
@@ -255,9 +349,7 @@ class DeepSeekBridge private constructor(
         message: String
     ): String {
 
-        waitingForResponse.set(
-            false
-        )
+        waitingForResponse.set(false)
 
         pendingResponse = null
 
@@ -322,13 +414,13 @@ class DeepSeekBridge private constructor(
 
     private fun findDeepSeekPackage(): String? {
 
-        /*
-         * This package name must match the DeepSeek Android
-         * application installed on the device.
+        /**
+         * Official DeepSeek Android package commonly used
+         * by the Android application.
          *
-         * If DeepSeek does not open, verify the package name.
+         * If the installed application uses another package,
+         * this list can be extended later.
          */
-
         val candidates =
             listOf(
                 "com.deepseek.chat"
@@ -378,7 +470,7 @@ class DeepSeekBridge private constructor(
                 ?: return
 
         // -----------------------------------------------------
-        // Ignore non-DeepSeek applications
+        // Only DeepSeek events
         // -----------------------------------------------------
 
         if (
@@ -388,17 +480,17 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Ignore events before request is actually sent
+        // Response mode not started yet
         // -----------------------------------------------------
-
-        val now =
-            System.currentTimeMillis()
 
         if (
             responseStartedAt <= 0L
         ) {
             return
         }
+
+        val now =
+            System.currentTimeMillis()
 
         if (
             now < responseStartedAt
@@ -407,7 +499,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Relevant accessibility events
+        // Relevant events only
         // -----------------------------------------------------
 
         when (
@@ -418,18 +510,20 @@ class DeepSeekBridge private constructor(
 
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
 
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
 
-                inspectDeepSeekScreen()
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+
+                inspectCurrentScreen()
             }
         }
     }
 
     // =========================================================
-    // INSPECT SCREEN
+    // INSPECT CURRENT SCREEN
     // =========================================================
 
-    private fun inspectDeepSeekScreen() {
+    private fun inspectCurrentScreen() {
 
         if (
             !waitingForResponse.get()
@@ -445,50 +539,154 @@ class DeepSeekBridge private constructor(
             service.rootInActiveWindow
                 ?: return
 
-        val response =
-            extractAssistantResponse(
+        val screenText =
+            collectScreenText(
                 root
             )
-                ?: return
 
         if (
-            response.isBlank()
+            screenText.isBlank()
         ) {
             return
         }
 
         // -----------------------------------------------------
-        // Never return user's own prompt
+        // Ignore identical screen updates
+        // -----------------------------------------------------
+
+        val normalizedScreen =
+            normalize(
+                screenText
+            )
+
+        if (
+            normalizedScreen ==
+            normalize(lastScreenSnapshot)
+        ) {
+            /*
+             * Same screen.
+             *
+             * But if a candidate is already present, check
+             * whether it has become stable.
+             */
+            checkCandidateStability()
+            return
+        }
+
+        lastScreenSnapshot =
+            screenText
+
+        // -----------------------------------------------------
+        // Extract possible assistant response
+        // -----------------------------------------------------
+
+        val candidate =
+            extractAssistantResponse(
+                root
+            )
+                ?: return
+
+        val cleanCandidate =
+            candidate.trim()
+
+        if (
+            cleanCandidate.isBlank()
+        ) {
+            return
+        }
+
+        // -----------------------------------------------------
+        // Never accept user's prompt
         // -----------------------------------------------------
 
         if (
-            normalize(response) ==
+            normalize(cleanCandidate) ==
             normalize(sentPrompt)
         ) {
             return
         }
 
         // -----------------------------------------------------
-        // Ignore duplicate response
+        // Must be newer than pre-send screen
         // -----------------------------------------------------
 
         if (
-            normalize(response) ==
-            normalize(lastResponse ?: "")
+            isAlreadyPresentBeforeSend(
+                cleanCandidate
+            )
         ) {
             return
         }
 
-        lastResponse =
-            response
+        // -----------------------------------------------------
+        // Validate
+        // -----------------------------------------------------
 
-        deliverResponse(
-            response
-        )
+        if (
+            !isPossibleAssistantText(
+                cleanCandidate
+            )
+        ) {
+            return
+        }
+
+        // -----------------------------------------------------
+        // New / changed response
+        // -----------------------------------------------------
+
+        if (
+            normalize(cleanCandidate) !=
+            normalize(lastCandidateResponse)
+        ) {
+
+            lastCandidateResponse =
+                cleanCandidate
+
+            candidateChangedAt =
+                System.currentTimeMillis()
+        }
+
+        // -----------------------------------------------------
+        // Check stability
+        // -----------------------------------------------------
+
+        checkCandidateStability()
     }
 
     // =========================================================
-    // EXTRACT RESPONSE FROM NODE TREE
+    // CHECK RESPONSE STABILITY
+    // =========================================================
+
+    private fun checkCandidateStability() {
+
+        if (
+            lastCandidateResponse.isBlank()
+        ) {
+            return
+        }
+
+        if (
+            candidateChangedAt <= 0L
+        ) {
+            return
+        }
+
+        val elapsed =
+            System.currentTimeMillis() -
+                candidateChangedAt
+
+        if (
+            elapsed >= RESPONSE_STABLE_MS
+        ) {
+
+            deliverResponse(
+                lastCandidateResponse
+            )
+        }
+    }
+
+    // =========================================================
+    // EXTRACT ASSISTANT RESPONSE
     // =========================================================
 
     private fun extractAssistantResponse(
@@ -499,8 +697,8 @@ class DeepSeekBridge private constructor(
             mutableListOf<String>()
 
         collectTextBlocks(
-            root,
-            blocks
+            node = root,
+            result = blocks
         )
 
         if (
@@ -510,7 +708,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Remove duplicates while preserving order
+        // Clean + unique
         // -----------------------------------------------------
 
         val uniqueBlocks =
@@ -530,28 +728,90 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Find likely assistant content
+        // Remove obvious user prompt
         // -----------------------------------------------------
 
-        val candidates =
+        val possibleBlocks =
             uniqueBlocks.filter {
-                isPossibleAssistantText(it)
+
+                normalize(it) !=
+                    normalize(sentPrompt)
             }
 
         if (
-            candidates.isEmpty()
+            possibleBlocks.isEmpty()
         ) {
             return null
         }
 
-        /*
-         * In most chat UIs the newest assistant message is
-         * located toward the end of the accessibility tree.
-         *
-         * We therefore prefer the latest valid block.
-         */
+        // -----------------------------------------------------
+        // Prefer JSON-looking responses
+        // -----------------------------------------------------
 
-        return candidates
+        val jsonCandidate =
+            possibleBlocks
+                .asReversed()
+                .firstOrNull {
+                    looksLikeJson(it)
+                }
+
+        if (
+            !jsonCandidate.isNullOrBlank()
+        ) {
+
+            return jsonCandidate
+        }
+
+        // -----------------------------------------------------
+        // Prefer blocks containing command fields
+        // -----------------------------------------------------
+
+        val commandCandidate =
+            possibleBlocks
+                .asReversed()
+                .firstOrNull {
+
+                    val lower =
+                        it.lowercase()
+
+                    lower.contains(
+                        "\"action\""
+                    ) ||
+                    lower.contains(
+                        "\"target\""
+                    ) ||
+                    lower.contains(
+                        "\"steps\""
+                    )
+                }
+
+        if (
+            !commandCandidate.isNullOrBlank()
+        ) {
+
+            return commandCandidate
+        }
+
+        // -----------------------------------------------------
+        // Remove UI controls
+        // -----------------------------------------------------
+
+        val validCandidates =
+            possibleBlocks.filter {
+                isPossibleAssistantText(it)
+            }
+
+        if (
+            validCandidates.isEmpty()
+        ) {
+            return null
+        }
+
+        // -----------------------------------------------------
+        // Newest valid block
+        // -----------------------------------------------------
+
+        return validCandidates
             .asReversed()
             .firstOrNull()
             ?.trim()
@@ -613,10 +873,73 @@ class DeepSeekBridge private constructor(
                     ?: continue
 
             collectTextBlocks(
-                child,
-                result
+                node = child,
+                result = result
             )
         }
+    }
+
+    // =========================================================
+    // COLLECT FULL SCREEN TEXT
+    // =========================================================
+
+    private fun collectScreenText(
+        root: AccessibilityNodeInfo
+    ): String {
+
+        val blocks =
+            mutableListOf<String>()
+
+        collectTextBlocks(
+            node = root,
+            result = blocks
+        )
+
+        return blocks
+            .map {
+                it.trim()
+            }
+            .filter {
+                it.isNotBlank()
+            }
+            .distinct()
+            .joinToString(
+                separator = "\n"
+            )
+    }
+
+    // =========================================================
+    // ALREADY PRESENT BEFORE SEND
+    // =========================================================
+
+    private fun isAlreadyPresentBeforeSend(
+        candidate: String
+    ): Boolean {
+
+        if (
+            beforeSendSnapshot.isBlank()
+        ) {
+            return false
+        }
+
+        val candidateNormalized =
+            normalize(candidate)
+
+        val oldNormalized =
+            normalize(beforeSendSnapshot)
+
+        /*
+         * Exact old-screen match.
+         */
+        if (
+            oldNormalized.contains(
+                candidateNormalized
+            )
+        ) {
+            return true
+        }
+
+        return false
     }
 
     // =========================================================
@@ -640,22 +963,32 @@ class DeepSeekBridge private constructor(
             clean.lowercase()
 
         // -----------------------------------------------------
-        // UI controls
+        // Exact UI controls
         // -----------------------------------------------------
 
         val ignoredExact =
             setOf(
+
                 "send",
                 "copy",
                 "share",
                 "regenerate",
                 "stop",
                 "stop generating",
+
                 "new chat",
+                "new conversation",
+
                 "back",
                 "menu",
                 "more",
-                "settings"
+                "settings",
+
+                "edit",
+                "delete",
+
+                "retry",
+                "cancel"
             )
 
         if (
@@ -676,19 +1009,26 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Common UI labels
+        // Common UI text
         // -----------------------------------------------------
 
         val ignoredContains =
             listOf(
+
                 "stop generating",
                 "regenerate response",
-                "new conversation"
+                "new conversation",
+
+                "start a new chat",
+                "deepseek chat",
+
+                "what can i help you with"
             )
 
         if (
             ignoredContains.any {
-                lower.contains(it)
+                lower == it ||
+                    lower.contains(it)
             }
         ) {
             return false
@@ -698,7 +1038,41 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // NORMALIZE TEXT
+    // JSON DETECTION
+    // =========================================================
+
+    private fun looksLikeJson(
+        text: String
+    ): Boolean {
+
+        val clean =
+            text.trim()
+
+        if (
+            clean.length < 2
+        ) {
+            return false
+        }
+
+        if (
+            clean.startsWith("{") &&
+            clean.endsWith("}")
+        ) {
+            return true
+        }
+
+        if (
+            clean.startsWith("[") &&
+            clean.endsWith("]")
+        ) {
+            return true
+        }
+
+        return false
+    }
+
+    // =========================================================
+    // NORMALIZE
     // =========================================================
 
     private fun normalize(
@@ -722,6 +1096,15 @@ class DeepSeekBridge private constructor(
         response: String
     ) {
 
+        val cleanResponse =
+            response.trim()
+
+        if (
+            cleanResponse.isBlank()
+        ) {
+            return
+        }
+
         val deferred =
             pendingResponse
                 ?: return
@@ -733,7 +1116,7 @@ class DeepSeekBridge private constructor(
         }
 
         deferred.complete(
-            response.trim()
+            cleanResponse
         )
     }
 
@@ -751,20 +1134,24 @@ class DeepSeekBridge private constructor(
 
     fun cancelCurrentRequest() {
 
-        waitingForResponse.set(
-            false
-        )
+        waitingForResponse.set(false)
 
         pendingResponse?.cancel()
 
         pendingResponse = null
 
-        lastResponse = null
-
         sentPrompt = ""
+
+        beforeSendSnapshot = ""
+
+        lastCandidateResponse = ""
+
+        lastScreenSnapshot = ""
 
         requestStartedAt = 0L
 
         responseStartedAt = 0L
+
+        candidateChangedAt = 0L
     }
 }
