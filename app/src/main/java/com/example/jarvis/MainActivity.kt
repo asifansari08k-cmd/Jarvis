@@ -1,7 +1,7 @@
 package com.example.jarvis
 
 // ============================================================================
-// EXHAUSTIVE SYSTEM IMPORTS (TITAN CORE ARCHITECTURE V45.0 - UNCOMPRESSED)
+// EXHAUSTIVE SYSTEM IMPORTS (TITAN CORE ARCHITECTURE V46.0 - UNCOMPRESSED)
 // ============================================================================
 
 import android.Manifest
@@ -128,12 +128,13 @@ import kotlin.math.tanh
 
 /**
  * ============================================================================
- * J.A.R.V.I.S. ULTIMATE TITAN CORE - EXTREME MONOLITHIC EDITION (V45.0)
+ * J.A.R.V.I.S. ULTIMATE TITAN CORE - EXTREME MONOLITHIC EDITION (V46.0)
  * ============================================================================
  * Architect: 𝑫𝒓𝒂𝒌𝒐𝑿𝑵𝒂𝒆𝒆𝒎
  * Developer: 𝑵𝒂𝒆𝒆𝒎
  * 
  * STEP 1: QUANTUM DYNAMIC BINDING ACTIVE
+ * - EXHAUSTIVE FIX APPLIED: Added FAULT_RECOVERY state handling in UI sync.
  * - XML Errors Completely Annihilated using `resources.getIdentifier()`.
  * - Compiler Unresolved References ('btnWeb', 'mainJarvisOrb') bypassed 100%.
  * - Enhanced Boot Sequence with Neural Network Terminal Simulations.
@@ -379,10 +380,10 @@ class MainActivity : ComponentActivity(), SensorEventListener, TextToSpeech.OnIn
 
     private fun printBootLogHeaders() {
         Log.i(TAG, "||=================================================||")
-        Log.i(TAG, "|| TITAN CORE V45.0 - MASTER BOOT SEQUENCE         ||")
+        Log.i(TAG, "|| TITAN CORE V46.0 - MASTER BOOT SEQUENCE         ||")
         Log.i(TAG, "|| Architect: Drako X Naeem                        ||")
         Log.i(TAG, "|| Mode: Extreme Monolithic Engine                 ||")
-        Log.i(TAG, "|| Status: DYNAMIC REFLECTION BINDING ACTIVE       ||")
+        Log.i(TAG, "|| Status: EXHAUSTIVE DYNAMIC BINDING ACTIVE       ||")
         Log.i(TAG, "||=================================================||")
     }
 
@@ -742,7 +743,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, TextToSpeech.OnIn
     }
 
     // ========================================================================
-    // VOICE NEURAL ENGINE (FOREGROUND SYNCHRONIZATION)
+    // VOICE NEURAL ENGINE (FOREGROUND SYNCHRONIZATION) - FIX APPLIED HERE
     // ========================================================================
 
     private fun setupVoiceNeuralEngine() {
@@ -765,11 +766,14 @@ class MainActivity : ComponentActivity(), SensorEventListener, TextToSpeech.OnIn
             
             onStateChanged = { sessionState ->
                 mainThreadHandler.post {
+                    // FIX: This when expression is now 100% EXHAUSTIVE.
                     when (sessionState) {
                         VoiceSessionManager.State.IDLE -> synchronizeHolographicState(OrbState.IDLE, "Standby")
                         VoiceSessionManager.State.LISTENING -> synchronizeHolographicState(OrbState.LISTENING, "Listening...")
                         VoiceSessionManager.State.PROCESSING -> synchronizeHolographicState(OrbState.THINKING, "Synthesizing...")
                         VoiceSessionManager.State.SPEAKING -> synchronizeHolographicState(OrbState.SPEAKING, "Transmitting...")
+                        VoiceSessionManager.State.FAULT_RECOVERY -> synchronizeHolographicState(OrbState.ERROR, "Recovering...")
+                        else -> synchronizeHolographicState(OrbState.IDLE, "Standby")
                     }
                 }
             },
