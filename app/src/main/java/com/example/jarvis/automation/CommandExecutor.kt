@@ -4,13 +4,17 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+
+import com.example.jarvis.accessibility.JarvisAccessibilityService
 import com.example.jarvis.ai.JarvisCommand
 import com.example.jarvis.ai.JarvisStep
 
 /**
  * JARVIS structured commands ko Android actions me convert karta hai.
  *
- * Direct app actions + AccessibilityService actions ko handle karta hai.
+ * DeepSeek = Brain
+ * CommandExecutor = Action Layer
+ * AccessibilityService = Phone UI Control
  */
 class CommandExecutor(
     private val context: Context
@@ -18,13 +22,13 @@ class CommandExecutor(
 
     fun execute(command: JarvisCommand): Boolean {
 
-        // Important/external actions ko confirmation ke bina execute nahi karte.
+        // Confirmation-required command
         if (command.requiresConfirmation) {
             showConfirmationRequired(command)
             return false
         }
 
-        // Multi-step automation
+        // Multi-step command
         if (command.steps.isNotEmpty()) {
 
             for (step in command.steps) {
@@ -76,21 +80,26 @@ class CommandExecutor(
         value: String?
     ): Boolean {
 
-        val normalizedAction =
-            action.trim().uppercase()
+        val normalizedAction = action
+            .trim()
+            .uppercase()
 
         return when (normalizedAction) {
 
             // =================================================
-            // APPS
+            // APP
             // =================================================
 
-            "OPEN_APP" -> {
-                openApp(target)
+            "OPEN_APP",
+            "LAUNCH_APP" -> {
+
+                openApp(
+                    target = target ?: value
+                )
             }
 
             // =================================================
-            // URL / SEARCH
+            // URL
             // =================================================
 
             "OPEN_URL" -> {
@@ -100,14 +109,19 @@ class CommandExecutor(
                 )
             }
 
-            "WEB_SEARCH" -> {
+            // =================================================
+            // WEB SEARCH
+            // =================================================
 
-                val query =
-                    value ?: target ?: ""
+            "WEB_SEARCH",
+            "SEARCH" -> {
+
+                val query = value ?: target ?: ""
 
                 if (query.isBlank()) {
                     false
                 } else {
+
                     openUrl(
                         "https://www.google.com/search?q=" +
                             Uri.encode(query)
@@ -141,6 +155,7 @@ class CommandExecutor(
             // =================================================
 
             "INSTAGRAM" -> {
+
                 openInstagram()
             }
 
@@ -149,7 +164,19 @@ class CommandExecutor(
             // =================================================
 
             "WHATSAPP" -> {
+
                 openWhatsApp()
+            }
+
+            // =================================================
+            // DEEPSEEK SEND
+            // =================================================
+
+            "SEND" -> {
+
+                performAccessibilityAction(
+                    action = "SEND"
+                )
             }
 
             // =================================================
@@ -228,7 +255,10 @@ class CommandExecutor(
 
             "WAIT" -> {
 
-                // WAIT ko future automation layer handle kar sakti hai.
+                /*
+                 * Actual delay future coroutine automation
+                 * layer me handle kiya ja sakta hai.
+                 */
                 true
             }
 
@@ -237,6 +267,18 @@ class CommandExecutor(
             // =================================================
 
             "NO_ACTION" -> {
+
+                true
+            }
+
+            // =================================================
+            // CONVERSATION
+            // =================================================
+
+            "CONVERSATION",
+            "CHAT" -> {
+
+                // Conversation ko phone action ki zarurat nahi.
                 true
             }
 
@@ -246,13 +288,7 @@ class CommandExecutor(
 
             "AUTOMATION" -> {
 
-                /*
-                 * AUTOMATION ke steps execute() method me
-                 * already handle ho chuke hote hain.
-                 *
-                 * Is method me command object available nahi hota,
-                 * isliye yahan command.steps access nahi karna hai.
-                 */
+                // Steps execute() me already handle ho chuke hain.
                 true
             }
 
@@ -281,31 +317,38 @@ class CommandExecutor(
         target: String?
     ): Boolean {
 
-        val appName =
-            target
-                ?.trim()
-                ?.lowercase()
-                ?: return false
+        val appName = target
+            ?.trim()
+            ?.lowercase()
+            ?: return false
 
         val packageName = when {
 
-            appName == "instagram" ->
+            appName == "instagram" ||
+                appName.contains("instagram") ->
                 "com.instagram.android"
 
-            appName == "youtube" ->
+            appName == "youtube" ||
+                appName.contains("youtube") ->
                 "com.google.android.youtube"
 
-            appName == "whatsapp" ->
+            appName == "whatsapp" ||
+                appName.contains("whatsapp") ->
                 "com.whatsapp"
 
-            appName == "chrome" ->
+            appName == "chrome" ||
+                appName.contains("chrome") ->
                 "com.android.chrome"
 
             appName == "google" ->
                 "com.google.android.googlequicksearchbox"
 
-            appName == "settings" ->
+            appName == "settings" ||
+                appName.contains("settings") ->
                 "com.android.settings"
+
+            appName == "deepseek" ->
+                findDeepSeekPackage()
 
             else ->
                 null
@@ -359,6 +402,33 @@ class CommandExecutor(
 
             false
         }
+    }
+
+    // =========================================================
+    // DEEPSEEK PACKAGE
+    // =========================================================
+
+    private fun findDeepSeekPackage(): String? {
+
+        val candidates = listOf(
+            "com.deepseek.chat"
+        )
+
+        for (packageName in candidates) {
+
+            try {
+
+                context.packageManager
+                    .getPackageInfo(packageName, 0)
+
+                return packageName
+
+            } catch (_: Exception) {
+                // Try next package
+            }
+        }
+
+        return null
     }
 
     // =========================================================
@@ -473,8 +543,7 @@ class CommandExecutor(
     ): Boolean {
 
         val service =
-            com.example.jarvis.accessibility
-                .JarvisAccessibilityService.instance
+            JarvisAccessibilityService.instance
 
         if (service == null) {
 
