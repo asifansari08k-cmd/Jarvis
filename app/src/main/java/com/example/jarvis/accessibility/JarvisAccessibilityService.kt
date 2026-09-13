@@ -2,8 +2,8 @@ package com.example.jarvis.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
-import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
 
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -13,21 +13,49 @@ class JarvisAccessibilityService : AccessibilityService() {
         var instance: JarvisAccessibilityService? = null
     }
 
+    // =========================================================
+    // SERVICE CONNECTED
+    // =========================================================
+
     override fun onServiceConnected() {
         super.onServiceConnected()
 
         instance = this
     }
 
+    // =========================================================
+    // ACCESSIBILITY EVENTS
+    // =========================================================
+
     override fun onAccessibilityEvent(
         event: AccessibilityEvent?
     ) {
-        // Screen changes can be observed here when required.
+        if (event == null) {
+            return
+        }
+
+        // Accessibility events can be observed here.
+        //
+        // Later DeepSeek integration can use:
+        //
+        // TYPE_WINDOW_STATE_CHANGED
+        // TYPE_WINDOW_CONTENT_CHANGED
+        // TYPE_VIEW_TEXT_CHANGED
+        //
+        // to detect DeepSeek UI changes and assistant responses.
     }
+
+    // =========================================================
+    // INTERRUPT
+    // =========================================================
 
     override fun onInterrupt() {
         // Required by AccessibilityService.
     }
+
+    // =========================================================
+    // DESTROY
+    // =========================================================
 
     override fun onDestroy() {
 
@@ -50,17 +78,29 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         return when (action.trim().uppercase()) {
 
+            // -------------------------------------------------
+            // BACK
+            // -------------------------------------------------
+
             "BACK" -> {
                 performGlobalAction(
                     GLOBAL_ACTION_BACK
                 )
             }
 
+            // -------------------------------------------------
+            // HOME
+            // -------------------------------------------------
+
             "HOME" -> {
                 performGlobalAction(
                     GLOBAL_ACTION_HOME
                 )
             }
+
+            // -------------------------------------------------
+            // RECENTS
+            // -------------------------------------------------
 
             "RECENTS",
             "RECENT_APPS" -> {
@@ -69,11 +109,19 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
 
+            // -------------------------------------------------
+            // SCROLL UP
+            // -------------------------------------------------
+
             "SCROLL_UP" -> {
                 scrollWindow(
                     AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
                 )
             }
+
+            // -------------------------------------------------
+            // SCROLL DOWN
+            // -------------------------------------------------
 
             "SCROLL_DOWN" -> {
                 scrollWindow(
@@ -81,13 +129,31 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
 
+            // -------------------------------------------------
+            // CLICK
+            // -------------------------------------------------
+
             "CLICK" -> {
-                clickTarget(target, value)
+                clickTarget(
+                    target = target,
+                    value = value
+                )
             }
 
+            // -------------------------------------------------
+            // TYPE
+            // -------------------------------------------------
+
             "TYPE" -> {
-                typeText(target, value)
+                typeText(
+                    target = target,
+                    value = value
+                )
             }
+
+            // -------------------------------------------------
+            // UNKNOWN ACTION
+            // -------------------------------------------------
 
             else -> {
                 false
@@ -130,18 +196,25 @@ class JarvisAccessibilityService : AccessibilityService() {
     ): Boolean {
 
         val searchText =
-            target?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: value?.trim()
-                    ?.takeIf { it.isNotBlank() }
+            target
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: value
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
                 ?: return false
 
         val root =
             rootInActiveWindow
                 ?: return false
 
-        // First try exact/normal text matching.
-        if (clickByText(
+        // 1. Try visible text.
+        if (
+            clickByText(
                 root,
                 searchText
             )
@@ -149,8 +222,9 @@ class JarvisAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // Then try content description.
-        if (clickByContentDescription(
+        // 2. Try content description.
+        if (
+            clickByContentDescription(
                 root,
                 searchText
             )
@@ -158,7 +232,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // Finally try resource-id matching.
+        // 3. Try resource ID.
         return clickByResourceId(
             root,
             searchText
@@ -182,11 +256,18 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         val nodes =
-            root.findAccessibilityNodeInfosByText(
-                cleanTarget
-            )
+            try {
+                root.findAccessibilityNodeInfosByText(
+                    cleanTarget
+                )
+            } catch (_: Exception) {
+                emptyList()
+            }
 
-        // Prefer an actually clickable matching node.
+        // -----------------------------------------------------
+        // First: directly clickable node
+        // -----------------------------------------------------
+
         for (node in nodes) {
 
             if (
@@ -194,14 +275,20 @@ class JarvisAccessibilityService : AccessibilityService() {
                 node.isClickable
             ) {
 
-                return node.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
+                if (
+                    node.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK
+                    )
+                ) {
+                    return true
+                }
             }
         }
 
-        // If text node itself is not clickable,
-        // walk upward to its clickable parent.
+        // -----------------------------------------------------
+        // Second: clickable parent
+        // -----------------------------------------------------
+
         for (node in nodes) {
 
             if (!node.isVisibleToUser) {
@@ -218,9 +305,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    return parent.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
+                    if (
+                        parent.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
                 }
 
                 parent =
@@ -248,10 +339,14 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         return findNodeByDescription(
-            root,
-            targetLower
+            node = root,
+            target = targetLower
         )
     }
+
+    // =========================================================
+    // FIND NODE BY DESCRIPTION
+    // =========================================================
 
     private fun findNodeByDescription(
         node: AccessibilityNodeInfo,
@@ -273,13 +368,19 @@ class JarvisAccessibilityService : AccessibilityService() {
             node.isVisibleToUser
         ) {
 
+            // Direct click.
             if (node.isClickable) {
 
-                return node.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
+                if (
+                    node.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK
+                    )
+                ) {
+                    return true
+                }
             }
 
+            // Click parent.
             var parent =
                 node.parent
 
@@ -290,9 +391,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    return parent.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
+                    if (
+                        parent.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
                 }
 
                 parent =
@@ -300,16 +405,21 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
+        // Search children.
         for (i in 0 until node.childCount) {
 
             val child =
-                node.getChild(i)
+                try {
+                    node.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
                     ?: continue
 
             if (
                 findNodeByDescription(
-                    child,
-                    target
+                    node = child,
+                    target = target
                 )
             ) {
                 return true
@@ -346,15 +456,27 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         for (node in nodes) {
 
+            // -------------------------------------------------
+            // Direct click
+            // -------------------------------------------------
+
             if (
                 node.isVisibleToUser &&
                 node.isClickable
             ) {
 
-                return node.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
+                if (
+                    node.performAction(
+                        AccessibilityNodeInfo.ACTION_CLICK
+                    )
+                ) {
+                    return true
+                }
             }
+
+            // -------------------------------------------------
+            // Click parent
+            // -------------------------------------------------
 
             var parent =
                 node.parent
@@ -366,9 +488,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                     parent.isClickable
                 ) {
 
-                    return parent.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
+                    if (
+                        parent.performAction(
+                            AccessibilityNodeInfo.ACTION_CLICK
+                        )
+                    ) {
+                        return true
+                    }
                 }
 
                 parent =
@@ -396,21 +522,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             rootInActiveWindow
                 ?: return false
 
+        // -----------------------------------------------------
+        // Find target editable field.
+        // -----------------------------------------------------
+
         val node =
             if (!target.isNullOrBlank()) {
 
                 findEditableNode(
-                    root,
-                    target.trim()
+                    root = root,
+                    target = target.trim()
                 )
-                    ?: findFocusedEditableNode(root)
+                    ?: findFocusedEditableNode(
+                        root
+                    )
 
             } else {
 
-                findFocusedEditableNode(root)
+                findFocusedEditableNode(
+                    root
+                )
             }
-                ?: findAnyEditableNode(root)
+                ?: findAnyEditableNode(
+                    root
+                )
                 ?: return false
+
+        // -----------------------------------------------------
+        // Prepare text arguments.
+        // -----------------------------------------------------
 
         val arguments =
             Bundle()
@@ -420,6 +560,10 @@ class JarvisAccessibilityService : AccessibilityService() {
                 .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
             value
         )
+
+        // -----------------------------------------------------
+        // Set text.
+        // -----------------------------------------------------
 
         return try {
 
@@ -453,7 +597,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         for (i in 0 until root.childCount) {
 
             val child =
-                root.getChild(i)
+                try {
+                    root.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
                     ?: continue
 
             val result =
@@ -487,7 +635,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         for (i in 0 until root.childCount) {
 
             val child =
-                root.getChild(i)
+                try {
+                    root.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
                     ?: continue
 
             val result =
@@ -543,9 +695,17 @@ class JarvisAccessibilityService : AccessibilityService() {
                     ?.lowercase()
 
             if (
-                text?.contains(targetLower) == true ||
-                description?.contains(targetLower) == true ||
-                hint?.contains(targetLower) == true
+                text?.contains(
+                    targetLower
+                ) == true ||
+
+                description?.contains(
+                    targetLower
+                ) == true ||
+
+                hint?.contains(
+                    targetLower
+                ) == true
             ) {
 
                 return root
@@ -555,13 +715,17 @@ class JarvisAccessibilityService : AccessibilityService() {
         for (i in 0 until root.childCount) {
 
             val child =
-                root.getChild(i)
+                try {
+                    root.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
                     ?: continue
 
             val result =
                 findEditableNode(
-                    child,
-                    target
+                    root = child,
+                    target = targetLower
                 )
 
             if (result != null) {
@@ -573,7 +737,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     // =========================================================
-    // SCROLL
+    // SCROLL WINDOW
     // =========================================================
 
     private fun scrollWindow(
@@ -585,7 +749,9 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: return false
 
         val scrollable =
-            findScrollableNode(root)
+            findScrollableNode(
+                root
+            )
                 ?: return false
 
         return try {
@@ -618,7 +784,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         for (i in 0 until root.childCount) {
 
             val child =
-                root.getChild(i)
+                try {
+                    root.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
                     ?: continue
 
             val result =
