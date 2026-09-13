@@ -30,15 +30,27 @@ android {
 }
 
 dependencies {
+
+    // AndroidX
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
+
+    // UI
     implementation("androidx.recyclerview:recyclerview:1.4.0")
+
+    // Lifecycle
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.2")
+
+    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Networking / HTTP
+    // Kept for existing non-AI network functionality.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // LiteRT / TensorFlow Lite runtime for the Hey Jarvis model
+    // LiteRT / TensorFlow Lite
+    // Required by the existing Hey Jarvis / voice models.
     implementation("com.google.ai.edge.litert:litert:2.1.0")
 }
