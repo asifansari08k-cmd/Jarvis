@@ -2,11 +2,12 @@ package com.example.jarvis.ai
 
 import android.content.Context
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.example.jarvis.accessibility.JarvisAccessibilityService
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -19,6 +20,12 @@ class DeepSeekBridge private constructor(
         private const val TAG = "DeepSeekBridge"
 
         private const val RESPONSE_TIMEOUT_MS = 60_000L
+
+        private const val UI_LOAD_DELAY_MS = 1_200L
+
+        private const val SEND_DELAY_MS = 400L
+
+        private const val RESPONSE_START_DELAY_MS = 1_000L
 
         @Volatile
         private var instance: DeepSeekBridge? = null
@@ -39,27 +46,30 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // INTERNAL STATE
+    // STATE
     // =========================================================
 
-    private val mainHandler =
-        Handler(
-            Looper.getMainLooper()
-        )
+    private val waitingForResponse =
+        AtomicBoolean(false)
 
+    @Volatile
     private var pendingResponse:
         CompletableDeferred<String?>? = null
 
+    @Volatile
     private var lastResponse: String? = null
 
-    private var waitingForResponse =
-        AtomicBoolean(false)
+    @Volatile
+    private var sentPrompt: String = ""
 
-    private var requestStartedAt =
-        0L
+    @Volatile
+    private var requestStartedAt: Long = 0L
+
+    @Volatile
+    private var responseStartedAt: Long = 0L
 
     // =========================================================
-    // SEND PROMPT TO DEEPSEEK
+    // SEND PROMPT
     // =========================================================
 
     suspend fun sendPrompt(
@@ -75,7 +85,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Prevent overlapping requests
+        // Prevent multiple requests
         // -----------------------------------------------------
 
         if (
@@ -86,7 +96,7 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Accessibility service required
+        // Accessibility service
         // -----------------------------------------------------
 
         val service =
@@ -98,10 +108,8 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Reset response state
+        // Prepare state
         // -----------------------------------------------------
-
-        lastResponse = null
 
         val deferred =
             CompletableDeferred<String?>()
@@ -110,6 +118,13 @@ class DeepSeekBridge private constructor(
             deferred
 
         waitingForResponse.set(true)
+
+        sentPrompt =
+            cleanPrompt
+
+        lastResponse = null
+
+        responseStartedAt = 0L
 
         requestStartedAt =
             System.currentTimeMillis()
@@ -120,22 +135,19 @@ class DeepSeekBridge private constructor(
             // Open DeepSeek
             // -------------------------------------------------
 
-            if (
-                !openDeepSeek()
-            ) {
+            if (!openDeepSeek()) {
 
-                waitingForResponse.set(false)
-                pendingResponse = null
-
-                return "Sir, DeepSeek app open nahi ho saki."
+                return finishWithError(
+                    "Sir, DeepSeek app open nahi ho saki."
+                )
             }
 
             // -------------------------------------------------
-            // Give DeepSeek UI time to load
+            // Wait for UI
             // -------------------------------------------------
 
-            delayOnMainThread(
-                700L
+            delay(
+                UI_LOAD_DELAY_MS
             )
 
             // -------------------------------------------------
@@ -150,38 +162,48 @@ class DeepSeekBridge private constructor(
 
             if (!typed) {
 
-                waitingForResponse.set(false)
-                pendingResponse = null
-
-                return "Sir, DeepSeek ke input box me text enter nahi ho saka."
+                return finishWithError(
+                    "Sir, DeepSeek ke input box me text enter nahi ho saka."
+                )
             }
 
             // -------------------------------------------------
-            // Small delay before sending
+            // Allow UI to update
             // -------------------------------------------------
 
-            delayOnMainThread(
-                250L
+            delay(
+                SEND_DELAY_MS
             )
 
             // -------------------------------------------------
-            // Send message
+            // Send
             // -------------------------------------------------
 
-            if (
-                !service.performJarvisAction(
+            val sent =
+                service.performJarvisAction(
                     action = "SEND"
                 )
-            ) {
 
-                waitingForResponse.set(false)
-                pendingResponse = null
+            if (!sent) {
 
-                return "Sir, DeepSeek message send nahi ho saka."
+                return finishWithError(
+                    "Sir, DeepSeek message send nahi ho saka."
+                )
             }
 
             // -------------------------------------------------
-            // Wait for assistant response
+            // Give response UI time to start
+            // -------------------------------------------------
+
+            responseStartedAt =
+                System.currentTimeMillis()
+
+            delay(
+                RESPONSE_START_DELAY_MS
+            )
+
+            // -------------------------------------------------
+            // Wait for response
             // -------------------------------------------------
 
             val response =
@@ -191,34 +213,55 @@ class DeepSeekBridge private constructor(
                     deferred.await()
                 }
 
-            waitingForResponse.set(false)
-            pendingResponse = null
+            if (
+                !response.isNullOrBlank()
+            ) {
 
-            return response
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?: "Sir, DeepSeek se response time par nahi mila."
+                return response
+                    .trim()
+            }
+
+            return finishWithError(
+                "Sir, DeepSeek se response time par nahi mila."
+            )
 
         } catch (e: Exception) {
 
             Log.e(
                 TAG,
-                "sendPrompt failed",
+                "DeepSeek request failed",
                 e
             )
 
-            waitingForResponse.set(false)
-            pendingResponse = null
-
-            return "Sir, DeepSeek communication me error aa gayi."
+            return finishWithError(
+                "Sir, DeepSeek communication me error aa gayi."
+            )
 
         } finally {
 
-            waitingForResponse.set(false)
+            waitingForResponse.set(
+                false
+            )
+
             pendingResponse = null
         }
+    }
+
+    // =========================================================
+    // ERROR / FINISH
+    // =========================================================
+
+    private fun finishWithError(
+        message: String
+    ): String {
+
+        waitingForResponse.set(
+            false
+        )
+
+        pendingResponse = null
+
+        return message
     }
 
     // =========================================================
@@ -232,7 +275,9 @@ class DeepSeekBridge private constructor(
             val packageName =
                 findDeepSeekPackage()
 
-            if (packageName == null) {
+            if (
+                packageName == null
+            ) {
 
                 Log.e(
                     TAG,
@@ -277,25 +322,36 @@ class DeepSeekBridge private constructor(
 
     private fun findDeepSeekPackage(): String? {
 
+        /*
+         * This package name must match the DeepSeek Android
+         * application installed on the device.
+         *
+         * If DeepSeek does not open, verify the package name.
+         */
+
         val candidates =
             listOf(
                 "com.deepseek.chat"
             )
 
-        for (packageName in candidates) {
+        val packageManager =
+            context.packageManager
+
+        for (
+            packageName in candidates
+        ) {
 
             try {
 
-                context.packageManager
-                    .getApplicationInfo(
-                        packageName,
-                        0
-                    )
+                packageManager.getApplicationInfo(
+                    packageName,
+                    0
+                )
 
                 return packageName
 
             } catch (_: Exception) {
-                // Try next package.
+                // Try next candidate.
             }
         }
 
@@ -307,7 +363,7 @@ class DeepSeekBridge private constructor(
     // =========================================================
 
     fun onAccessibilityEvent(
-        event: android.view.accessibility.AccessibilityEvent
+        event: AccessibilityEvent
     ) {
 
         if (
@@ -321,7 +377,10 @@ class DeepSeekBridge private constructor(
                 ?.toString()
                 ?: return
 
-        // Only process DeepSeek events.
+        // -----------------------------------------------------
+        // Ignore non-DeepSeek applications
+        // -----------------------------------------------------
+
         if (
             packageName != findDeepSeekPackage()
         ) {
@@ -329,33 +388,37 @@ class DeepSeekBridge private constructor(
         }
 
         // -----------------------------------------------------
-        // Do not capture events immediately after sending.
-        // This prevents the user's own message from becoming
-        // the assistant response.
+        // Ignore events before request is actually sent
         // -----------------------------------------------------
 
-        val elapsed =
-            System.currentTimeMillis() -
-                requestStartedAt
+        val now =
+            System.currentTimeMillis()
 
         if (
-            elapsed < 800L
+            responseStartedAt <= 0L
         ) {
             return
         }
+
+        if (
+            now < responseStartedAt
+        ) {
+            return
+        }
+
+        // -----------------------------------------------------
+        // Relevant accessibility events
+        // -----------------------------------------------------
 
         when (
             event.eventType
         ) {
 
-            android.view.accessibility.AccessibilityEvent
-                .TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
 
-            android.view.accessibility.AccessibilityEvent
-                .TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
 
-            android.view.accessibility.AccessibilityEvent
-                .TYPE_VIEW_TEXT_CHANGED -> {
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
 
                 inspectDeepSeekScreen()
             }
@@ -363,10 +426,16 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // INSPECT DEEPSEEK SCREEN
+    // INSPECT SCREEN
     // =========================================================
 
     private fun inspectDeepSeekScreen() {
+
+        if (
+            !waitingForResponse.get()
+        ) {
+            return
+        }
 
         val service =
             JarvisAccessibilityService.instance
@@ -376,34 +445,36 @@ class DeepSeekBridge private constructor(
             service.rootInActiveWindow
                 ?: return
 
-        val text =
-            collectVisibleText(
-                root
-            )
-
-        if (
-            text.isBlank()
-        ) {
-            return
-        }
-
         val response =
             extractAssistantResponse(
-                text
+                root
             )
+                ?: return
 
         if (
-            response.isNullOrBlank()
+            response.isBlank()
         ) {
             return
         }
 
         // -----------------------------------------------------
-        // Ignore duplicate response.
+        // Never return user's own prompt
         // -----------------------------------------------------
 
         if (
-            response == lastResponse
+            normalize(response) ==
+            normalize(sentPrompt)
+        ) {
+            return
+        }
+
+        // -----------------------------------------------------
+        // Ignore duplicate response
+        // -----------------------------------------------------
+
+        if (
+            normalize(response) ==
+            normalize(lastResponse ?: "")
         ) {
             return
         }
@@ -417,68 +488,116 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // COLLECT ACCESSIBILITY TEXT
+    // EXTRACT RESPONSE FROM NODE TREE
     // =========================================================
 
-    private fun collectVisibleText(
-        node: android.view.accessibility.AccessibilityNodeInfo
-    ): String {
+    private fun extractAssistantResponse(
+        root: AccessibilityNodeInfo
+    ): String? {
 
-        val result =
-            StringBuilder()
+        val blocks =
+            mutableListOf<String>()
 
-        collectNodeText(
-            node,
-            result
+        collectTextBlocks(
+            root,
+            blocks
         )
 
-        return result
-            .toString()
-            .trim()
+        if (
+            blocks.isEmpty()
+        ) {
+            return null
+        }
+
+        // -----------------------------------------------------
+        // Remove duplicates while preserving order
+        // -----------------------------------------------------
+
+        val uniqueBlocks =
+            blocks
+                .map {
+                    it.trim()
+                }
+                .filter {
+                    it.isNotBlank()
+                }
+                .distinct()
+
+        if (
+            uniqueBlocks.isEmpty()
+        ) {
+            return null
+        }
+
+        // -----------------------------------------------------
+        // Find likely assistant content
+        // -----------------------------------------------------
+
+        val candidates =
+            uniqueBlocks.filter {
+                isPossibleAssistantText(it)
+            }
+
+        if (
+            candidates.isEmpty()
+        ) {
+            return null
+        }
+
+        /*
+         * In most chat UIs the newest assistant message is
+         * located toward the end of the accessibility tree.
+         *
+         * We therefore prefer the latest valid block.
+         */
+
+        return candidates
+            .asReversed()
+            .firstOrNull()
+            ?.trim()
     }
 
-    private fun collectNodeText(
-        node: android.view.accessibility.AccessibilityNodeInfo,
-        result: StringBuilder
+    // =========================================================
+    // COLLECT TEXT BLOCKS
+    // =========================================================
+
+    private fun collectTextBlocks(
+        node: AccessibilityNodeInfo,
+        result: MutableList<String>
     ) {
 
         if (
             node.isVisibleToUser
         ) {
 
-            node.text
-                ?.toString()
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.let {
+            val text =
+                node.text
+                    ?.toString()
+                    ?.trim()
 
-                    result.append(
-                        it
-                    )
+            if (
+                !text.isNullOrBlank()
+            ) {
 
-                    result.append(
-                        '\n'
-                    )
-                }
+                result.add(
+                    text
+                )
+            }
 
-            node.contentDescription
-                ?.toString()
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.let {
+            val description =
+                node.contentDescription
+                    ?.toString()
+                    ?.trim()
 
-                    result.append(
-                        it
-                    )
+            if (
+                !description.isNullOrBlank() &&
+                description != text
+            ) {
 
-                    result.append(
-                        '\n'
-                    )
-                }
+                result.add(
+                    description
+                )
+            }
         }
 
         for (
@@ -493,7 +612,7 @@ class DeepSeekBridge private constructor(
                 }
                     ?: continue
 
-            collectNodeText(
+            collectTextBlocks(
                 child,
                 result
             )
@@ -501,148 +620,98 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // EXTRACT ASSISTANT RESPONSE
-    // =========================================================
-
-    private fun extractAssistantResponse(
-        screenText: String
-    ): String? {
-
-        val lines =
-            screenText
-                .lines()
-                .map {
-                    it.trim()
-                }
-                .filter {
-                    it.isNotBlank()
-                }
-
-        if (
-            lines.isEmpty()
-        ) {
-            return null
-        }
-
-        /*
-         * Accessibility UI differs between DeepSeek versions.
-         *
-         * Therefore we first look for common assistant markers.
-         */
-
-        val markers =
-            listOf(
-                "DeepSeek",
-                "Assistant",
-                "AI"
-            )
-
-        for (marker in markers) {
-
-            val index =
-                lines.indexOfLast {
-                    it.equals(
-                        marker,
-                        ignoreCase = true
-                    )
-                }
-
-            if (
-                index >= 0 &&
-                index + 1 < lines.size
-            ) {
-
-                val response =
-                    lines
-                        .subList(
-                            index + 1,
-                            lines.size
-                        )
-                        .joinToString(
-                            "\n"
-                        )
-                        .trim()
-
-                if (
-                    isValidAssistantResponse(
-                        response
-                    )
-                ) {
-
-                    return response
-                }
-            }
-        }
-
-        /*
-         * Generic fallback:
-         *
-         * The latest sufficiently long visible block
-         * may be the assistant response.
-         */
-
-        val candidates =
-            lines.filter {
-                it.length >= 3
-            }
-
-        if (
-            candidates.isNotEmpty()
-        ) {
-
-            val candidate =
-                candidates.last()
-
-            if (
-                isValidAssistantResponse(
-                    candidate
-                )
-            ) {
-
-                return candidate
-            }
-        }
-
-        return null
-    }
-
-    // =========================================================
     // RESPONSE VALIDATION
     // =========================================================
 
-    private fun isValidAssistantResponse(
+    private fun isPossibleAssistantText(
         text: String
     ): Boolean {
 
+        val clean =
+            text.trim()
+
         if (
-            text.isBlank()
+            clean.length < 3
         ) {
             return false
         }
 
         val lower =
-            text.lowercase()
+            clean.lowercase()
 
-        // Ignore obvious UI elements.
-        val ignored =
-            listOf(
+        // -----------------------------------------------------
+        // UI controls
+        // -----------------------------------------------------
+
+        val ignoredExact =
+            setOf(
                 "send",
                 "copy",
-                "regenerate",
                 "share",
+                "regenerate",
+                "stop",
                 "stop generating",
-                "new chat"
+                "new chat",
+                "back",
+                "menu",
+                "more",
+                "settings"
             )
 
         if (
-            ignored.any {
-                lower == it
+            lower in ignoredExact
+        ) {
+            return false
+        }
+
+        // -----------------------------------------------------
+        // User prompt
+        // -----------------------------------------------------
+
+        if (
+            normalize(clean) ==
+            normalize(sentPrompt)
+        ) {
+            return false
+        }
+
+        // -----------------------------------------------------
+        // Common UI labels
+        // -----------------------------------------------------
+
+        val ignoredContains =
+            listOf(
+                "stop generating",
+                "regenerate response",
+                "new conversation"
+            )
+
+        if (
+            ignoredContains.any {
+                lower.contains(it)
             }
         ) {
             return false
         }
 
         return true
+    }
+
+    // =========================================================
+    // NORMALIZE TEXT
+    // =========================================================
+
+    private fun normalize(
+        text: String
+    ): String {
+
+        return text
+            .trim()
+            .lowercase()
+            .replace(
+                Regex("\\s+"),
+                " "
+            )
     }
 
     // =========================================================
@@ -669,38 +738,6 @@ class DeepSeekBridge private constructor(
     }
 
     // =========================================================
-    // MAIN THREAD DELAY
-    // =========================================================
-
-    private suspend fun delayOnMainThread(
-        delayMillis: Long
-    ) {
-
-        kotlinx.coroutines.suspendCancellableCoroutine<Unit> {
-            continuation ->
-
-            mainHandler.postDelayed({
-
-                if (
-                    continuation.isActive
-                ) {
-                    continuation.resume(
-                        Unit
-                    ) {}
-                }
-
-            }, delayMillis)
-
-            continuation.invokeOnCancellation {
-
-                mainHandler.removeCallbacksAndMessages(
-                    null
-                )
-            }
-        }
-    }
-
-    // =========================================================
     // STATUS
     // =========================================================
 
@@ -721,6 +758,13 @@ class DeepSeekBridge private constructor(
         pendingResponse?.cancel()
 
         pendingResponse = null
+
         lastResponse = null
+
+        sentPrompt = ""
+
+        requestStartedAt = 0L
+
+        responseStartedAt = 0L
     }
 }
