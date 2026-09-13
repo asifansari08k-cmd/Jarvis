@@ -2,44 +2,41 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ========================================================= -->
-    <!-- CORE SYSTEM & HARDWARE PERMISSIONS (GOD MODE)             -->
-    <!-- ========================================================= -->
+    <!-- ============================================================================ -->
+    <!-- J.A.R.V.I.S. TITAN CORE V45.0 - MASTER PERMISSION REGISTRY                   -->
+    <!-- ============================================================================ -->
 
-    <!-- Network & Internet -->
+    <!-- 1. NETWORK & CLOUD UPLINK (Required for Gemini/ChatGPT/Grok API) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
-    <!-- Microphone & Audio Control (For Voice Engine & Muting Beeps) -->
+    <!-- 2. ACOUSTIC SENSORS & AUDIO CONTROL (Required for Background Voice Engine) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
-    <!-- Background & Power Management (To keep JARVIS alive) -->
+    <!-- 3. BACKGROUND GOD MODE & WAKE LOCKS (Keeps Engine Running 24/7) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Screen, UI & Overlay (For Floating Neon Orb) -->
+    <!-- 4. SYSTEM OVERLAY & UI INJECTION (Required for Floating JARVIS Orb) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
-    <!-- App Discovery & Automation (Crucial for Opening Apps) -->
+    <!-- 5. APP AUTOMATION & DISCOVERY (Required to Launch WhatsApp, Instagram, etc.) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
 
-    <!-- Hardware Feedback -->
+    <!-- 6. HARDWARE KINEMATICS & FEEDBACK (Required for Vibration & Sensors) -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- Android 13+ Notifications -->
+    <!-- 7. MODERN ANDROID 13+ COMPATIBILITY -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ========================================================= -->
-    <!-- FUTURE AI AUTOMATION PERMISSIONS (Calls, SMS, Contacts)   -->
-    <!-- ========================================================= -->
-    
+    <!-- 8. FUTURE AUTOMATION EXPANSION (Prepared for Calls, Media & Bluetooth IoT) -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -47,26 +44,39 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- ========================================================= -->
-    <!-- APPLICATION CONFIGURATION                                 -->
-    <!-- ========================================================= -->
+    <!-- ============================================================================ -->
+    <!-- HARDWARE FEATURE REQUIREMENTS                                                -->
+    <!-- ============================================================================ -->
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.proximity" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
 
+    <!-- ============================================================================ -->
+    <!-- APPLICATION CONFIGURATION & HARDWARE ACCELERATION                            -->
+    <!-- ============================================================================ -->
+
+    <!-- NOTE: android:icon uses the default Android system icon to guarantee ZERO compilation errors. -->
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="@string/app_name"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="JARVIS Titan Core"
         android:supportsRtl="true"
         android:theme="@style/Theme.Jarvis"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
         tools:targetApi="31">
 
-        <!-- Main JARVIS Neural Interface Activity -->
+        <!-- ======================================================================== -->
+        <!-- MAIN NEURAL INTERFACE ACTIVITY (UI DASHBOARD)                            -->
+        <!-- ======================================================================== -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|screenSize"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -74,19 +84,23 @@
             </intent-filter>
         </activity>
 
-        <!-- JARVIS Voice Engine (Background Continuous Listening) -->
+        <!-- ======================================================================== -->
+        <!-- BACKGROUND VOICE & OVERLAY SERVICE (GOD MODE ENGINE)                     -->
+        <!-- ======================================================================== -->
         <service
             android:name=".voice.VoiceService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- JARVIS Automation Engine (Accessibility Service for Clicking/Typing) -->
+        <!-- ======================================================================== -->
+        <!-- JARVIS ACCESSIBILITY AUTOMATION ENGINE (SCREEN SCRAPING & AUTO-CLICK)    -->
+        <!-- ======================================================================== -->
         <service
             android:name=".automation.JarvisAccessibilityService"
             android:enabled="true"
             android:exported="true"
-            android:label="JARVIS Automation Engine"
+            android:label="JARVIS Automation Core"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
